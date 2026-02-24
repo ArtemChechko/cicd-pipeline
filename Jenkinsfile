@@ -1,21 +1,33 @@
 pipeline {
   agent any
 
+  tools {
+    nodejs 'node-7.8.0'
+  }
+
   environment {
     APP_NAME = "cicd-pipeline-app"
-    CONTAINER_PORT = "3000"   // порт всередині контейнера
+    CONTAINER_PORT = "3000"
   }
 
   stages {
+
     stage('Checkout') {
-      steps { checkout scm }
+      steps {
+        checkout scm
+      }
     }
 
     stage('Build') {
       steps {
         sh '''
+          echo "Node version:"
+          node -v
+          echo "NPM version:"
+          npm -v
+
           if [ -f package.json ]; then
-            npm ci || npm install
+            npm install
             npm run build || true
           else
             echo "No package.json - skip build"
@@ -28,7 +40,7 @@ pipeline {
       steps {
         sh '''
           if [ -f package.json ]; then
-            npm test || true
+            npm test -- --watchAll=false || true
           else
             echo "No tests - skip"
           fi
@@ -41,7 +53,10 @@ pipeline {
         script {
           env.IMAGE = "cicd-pipeline:${env.BRANCH_NAME}-${env.BUILD_NUMBER}"
         }
-        sh 'docker build -t "$IMAGE" .'
+        sh '''
+          echo "Building Docker image: $IMAGE"
+          docker build -t "$IMAGE" .
+        '''
       }
     }
 
@@ -53,19 +68,34 @@ pipeline {
 
           sh """
             set -e
-            echo "Deploy ${env.BRANCH_NAME} -> http://localhost:${hostPort}"
 
+            echo "Deploying branch: ${env.BRANCH_NAME}"
+            echo "App will be available at: http://localhost:${hostPort}"
+
+            # Видаляємо ТІЛЬКИ контейнер поточного env
             docker rm -f ${containerName} 2>/dev/null || true
 
+            # Запускаємо новий контейнер
             docker run -d --name ${containerName} \\
               -p ${hostPort}:${CONTAINER_PORT} \\
               -e PORT=${CONTAINER_PORT} \\
+              -e HOST=0.0.0.0 \\
               ${IMAGE}
 
+            echo "Running containers:"
             docker ps --filter "name=${containerName}"
           """
         }
       }
+    }
+  }
+
+  post {
+    success {
+      echo "Pipeline completed successfully for branch: ${env.BRANCH_NAME}"
+    }
+    failure {
+      echo "Pipeline FAILED for branch: ${env.BRANCH_NAME}"
     }
   }
 }
