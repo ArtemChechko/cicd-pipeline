@@ -75,13 +75,25 @@ pipeline {
       }
     }
 
-    stage('Trivy (vulnerability scan)') {
+    stage('Scan Docker Image for Vulnerabilities') {
       steps {
-        sh '''
-          echo "Running trivy scan..."
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:latest image --severity HIGH,CRITICAL --no-progress "$DH_IMAGE"
-        '''
+        script {
+          def vulnerabilities = sh(
+            script: """
+              docker run --rm \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                aquasec/trivy:latest image \
+                --timeout 20m \
+                --scanners vuln \
+                --severity HIGH,CRITICAL \
+                --no-progress \
+                ${env.DH_IMAGE}
+            """,
+            returnStdout: true
+          ).trim()
+    
+          echo "Vulnerability Report:\n${vulnerabilities}"
+        }
       }
     }
 
