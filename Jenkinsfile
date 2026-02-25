@@ -52,6 +52,15 @@ pipeline {
       }
     }
 
+    stage('Hadolint (Dockerfile check)') {
+      steps {
+        sh '''
+          echo "Running hadolint..."
+          docker run --rm -i hadolint/hadolint < Dockerfile
+        '''
+      }
+    }
+
     stage('Build Docker image') {
       steps {
         script {
@@ -62,6 +71,16 @@ pipeline {
         sh '''
           echo "Building Docker image: $DH_IMAGE"
           docker build -t "$DH_IMAGE" .
+        '''
+      }
+    }
+
+    stage('Trivy (vulnerability scan)') {
+      steps {
+        sh '''
+          echo "Running trivy scan..."
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image --severity HIGH,CRITICAL --no-progress "$DH_IMAGE"
         '''
       }
     }
