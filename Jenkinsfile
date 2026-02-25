@@ -57,13 +57,24 @@ pipeline {
         docker {
           image 'node:7.8.0'
           args '-u root:root'
+          reuseNode true
         }
+      }
+      environment {
+        CI = 'true'               // важливо для CRA/Jest
+      }
+      options {
+        timeout(time: 10, unit: 'MINUTES')  // щоб не висіло вічно
       }
       steps {
         unstash 'built'
         sh '''
+          set -euxo pipefail
+          ls -la
+    
           if [ -f package.json ]; then
-            npm test -- --watchAll=false || true
+            # без watch, без інтерактиву, стабільніше в CI
+            npm test -- --watchAll=false --runInBand || true
           else
             echo "No tests - skip"
           fi
