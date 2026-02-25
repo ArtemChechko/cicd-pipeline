@@ -1,5 +1,5 @@
 pipeline {
-  agent any
+  agent none
 
   tools {
     nodejs 'node'
@@ -12,18 +12,29 @@ pipeline {
     // Docker Hub
     DOCKERHUB_REPO = "artemchechko/cicd-pipeline"
     DOCKERHUB_CREDS = "dockerhub-creds"
+
+    DOCKER_HOST = "unix:///var/run/docker.sock"
   }
 
   stages {
 
     stage('Checkout') {
+      agent any
       steps {
         checkout scm
+        stash name: 'src', includes: '**/*'
       }
     }
 
     stage('Build') {
+      agent {
+        docker {
+          image 'node:7.8.0'
+          args '-u root:root'
+        }
+      }
       steps {
+        unstash 'src'
         sh '''
           echo "Node version:"
           node -v
@@ -37,11 +48,19 @@ pipeline {
             echo "No package.json - skip build"
           fi
         '''
+        stash name: 'built', includes: '**/*'
       }
     }
 
     stage('Test') {
+      agent {
+        docker {
+          image 'node:7.8.0'
+          args '-u root:root'
+        }
+      }
       steps {
+        unstash 'built'
         sh '''
           if [ -f package.json ]; then
             npm test -- --watchAll=false || true
@@ -53,51 +72,72 @@ pipeline {
     }
 
     stage('Hadolint (Dockerfile check)') {
+      agent {
+        docker {
+          image 'hadolint/hadolint:latest'
+          args '-u root:root'
+        }
+      }
       steps {
+        unstash 'built'
         sh '''
           echo "Running hadolint..."
-          docker run --rm -i hadolint/hadolint < Dockerfile
+          hadolint Dockerfile
         '''
       }
     }
 
     stage('Build Docker image') {
+      when { anyOf { branch 'main'; branch 'dev' } }
+      agent {
+        docker {
+          image 'docker:27-cli'
+          args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
+        }
+      }
       steps {
+        unstash 'built'
         script {
-          // Stable tags per env (advanced requirement)
           env.ENV_TAG = (env.BRANCH_NAME == 'main') ? 'nodemain-v1.0' : 'nodedev-v1.0'
           env.DH_IMAGE = "${env.DOCKERHUB_REPO}:${env.ENV_TAG}"
         }
         sh '''
           echo "Building Docker image: $DH_IMAGE"
+          docker version
           docker build -t "$DH_IMAGE" .
         '''
       }
     }
 
     stage('Scan Docker Image for Vulnerabilities') {
-      steps {
-        script {
-          def vulnerabilities = sh(
-            script: """
-              docker run --rm \
-                -v /var/run/docker.sock:/var/run/docker.sock \
-                aquasec/trivy:latest image \
-                --timeout 20m \
-                --scanners vuln \
-                --severity HIGH,CRITICAL \
-                --no-progress \
-                ${env.DH_IMAGE}
-            """,
-            returnStdout: true
-          ).trim()
-    
-          echo "Vulnerability Report:\n${vulnerabilities}"
+      when { anyOf { branch 'main'; branch 'dev' } }
+      agent {
+        docker {
+          image 'aquasec/trivy:latest'
+          args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
         }
+      }
+      steps {
+        sh '''
+          echo "Running trivy scan..."
+          trivy image \
+            --timeout 20m \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --no-progress \
+            "$DH_IMAGE"
+        '''
       }
     }
 
     stage('Push image to Docker Hub') {
+      when { anyOf { branch 'main'; branch 'dev' } }
+      agent {
+        docker {
+          image 'docker:27-cli'
+          args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
+        }
+      }
       steps {
         withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDS}", usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
           sh '''
@@ -110,6 +150,8 @@ pipeline {
     }
 
     stage('Trigger deploy pipeline') {
+      when { anyOf { branch 'main'; branch 'dev' } }
+      agent any
       steps {
         script {
           def jobName = (env.BRANCH_NAME == 'main') ? 'Deploy_to_main' : 'Deploy_to_dev'
@@ -128,7 +170,8 @@ pipeline {
       echo "CICD FAILED for branch: ${env.BRANCH_NAME}"
     }
     always {
-      sh 'docker images | head -n 20 || true'
+      // тут краще не робити docker images, бо not every agent has docker
+      echo "Pipeline finished."
     }
   }
 }
