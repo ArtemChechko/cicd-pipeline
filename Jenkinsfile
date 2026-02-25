@@ -8,6 +8,10 @@ pipeline {
   environment {
     APP_NAME = "cicd-pipeline-app"
     CONTAINER_PORT = "3000"
+
+    // Docker Hub
+    DOCKERHUB_REPO = "artemchechko/cicd-pipeline"
+    DOCKERHUB_CREDS = "dockerhub-creds"
   }
 
   stages {
@@ -51,40 +55,35 @@ pipeline {
     stage('Build Docker image') {
       steps {
         script {
-          env.IMAGE = "cicd-pipeline:${env.BRANCH_NAME}-${env.BUILD_NUMBER}"
+          // Stable tags per env (advanced requirement)
+          env.ENV_TAG = (env.BRANCH_NAME == 'main') ? 'nodemain-v1.0' : 'nodedev-v1.0'
+          env.DH_IMAGE = "${env.DOCKERHUB_REPO}:${env.ENV_TAG}"
         }
         sh '''
-          echo "Building Docker image: $IMAGE"
-          docker build -t "$IMAGE" .
+          echo "Building Docker image: $DH_IMAGE"
+          docker build -t "$DH_IMAGE" .
         '''
       }
     }
 
-    stage('Deploy') {
+    stage('Push image to Docker Hub') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: "${DOCKERHUB_CREDS}", usernameVariable: 'DH_USER', passwordVariable: 'DH_PASS')]) {
+          sh '''
+            echo "$DH_PASS" | docker login -u "$DH_USER" --password-stdin
+            docker push "$DH_IMAGE"
+            docker logout
+          '''
+        }
+      }
+    }
+
+    stage('Trigger deploy pipeline') {
       steps {
         script {
-          def hostPort = (env.BRANCH_NAME == 'main') ? '3000' : '3001'
-          def containerName = "${APP_NAME}-${env.BRANCH_NAME}"
-
-          sh """
-            set -e
-
-            echo "Deploying branch: ${env.BRANCH_NAME}"
-            echo "App will be available at: http://localhost:${hostPort}"
-
-            # Видаляємо ТІЛЬКИ контейнер поточного env
-            docker rm -f ${containerName} 2>/dev/null || true
-
-            # Запускаємо новий контейнер
-            docker run -d --name ${containerName} \\
-              -p ${hostPort}:${CONTAINER_PORT} \\
-              -e PORT=${CONTAINER_PORT} \\
-              -e HOST=0.0.0.0 \\
-              ${IMAGE}
-
-            echo "Running containers:"
-            docker ps --filter "name=${containerName}"
-          """
+          def jobName = (env.BRANCH_NAME == 'main') ? 'Deploy_to_main' : 'Deploy_to_dev'
+          echo "Triggering downstream job: ${jobName}"
+          build job: jobName, wait: true
         }
       }
     }
@@ -92,10 +91,13 @@ pipeline {
 
   post {
     success {
-      echo "Pipeline completed successfully for branch: ${env.BRANCH_NAME}"
+      echo "CICD completed successfully for branch: ${env.BRANCH_NAME}"
     }
     failure {
-      echo "Pipeline FAILED for branch: ${env.BRANCH_NAME}"
+      echo "CICD FAILED for branch: ${env.BRANCH_NAME}"
+    }
+    always {
+      sh 'docker images | head -n 20 || true'
     }
   }
 }
