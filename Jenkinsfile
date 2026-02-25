@@ -1,10 +1,6 @@
 pipeline {
   agent none
 
-  tools {
-    nodejs 'node'
-  }
-
   environment {
     APP_NAME = "cicd-pipeline-app"
     CONTAINER_PORT = "3000"
@@ -31,16 +27,16 @@ pipeline {
         docker {
           image 'node:7.8.0'
           args '-u root:root'
+          reuseNode true
         }
       }
       steps {
         unstash 'src'
         sh '''
-          echo "Node version:"
+          set -eux
           node -v
-          echo "NPM version:"
           npm -v
-
+    
           if [ -f package.json ]; then
             npm install
             npm run build || true
@@ -48,7 +44,7 @@ pipeline {
             echo "No package.json - skip build"
           fi
         '''
-        stash name: 'built', includes: '**/*'
+        stash name: 'built', includes: '**/*', excludes: 'node_modules/**,.git/**'
       }
     }
 
